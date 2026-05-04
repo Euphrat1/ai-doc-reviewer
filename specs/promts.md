@@ -1,16 +1,16 @@
 ## promts.md
 
-Этот файл содержит готовые шаблоны промптов:
-- для анализа через OpenRouter (универсальный и отдельный под `anthropic/claude-sonnet-4.6`);
+Этот файл содержит готовые шаблоны промптов для LLM Provider (MVP provider: OpenRouter):
+- для анализа (универсальный и отдельный под `anthropic/claude-sonnet-4.6`);
 - PII-маскирование вынесено в отдельный сервис (отдельный репозиторий PII Masking Service); промпты для него находятся в репозитории сервиса (`promts_pii.md`).
 
 Важно:
-- В промптах для OpenRouter требуется **строго JSON**: без Markdown, без тройных бэктиков, без текста вне JSON.
+- Ответ LLM Provider требуется **строго JSON**: без Markdown, без тройных бэктиков, без текста вне JSON.
 - Пороговые правила количества вопросов должны строго соответствовать ТЗ (`tech_req.md`, F4/F4.1).
 
 ---
 
-### 1) OpenRouter — Универсальный промпт (для любых моделей)
+### 1) LLM Provider — Универсальный промпт (для любых моделей)
 
 #### SYSTEM (universal)
 You are a document analysis assistant.
@@ -63,7 +63,7 @@ CONTEXT (Prompt Corpus):
 
 ---
 
-### 2) OpenRouter — Специализированный промпт под `anthropic/claude-sonnet-4.6`
+### 2) LLM Provider — Специализированный промпт под `anthropic/claude-sonnet-4.6`
 
 #### SYSTEM (claude-sonnet-4.6)
 Output must be ONLY a single JSON object.
@@ -113,7 +113,7 @@ OUTPUT:
 
 ---
 
-### 3) OpenRouter — Ручной запрос 1 уточняющего вопроса (F6)
+### 3) LLM Provider — Ручной запрос 1 уточняющего вопроса (F6)
 
 #### SYSTEM (manual-question)
 Return ONLY valid JSON. No Markdown. No backticks. No extra text.
@@ -137,7 +137,7 @@ CONTEXT (Prompt Corpus):
 
 ---
 
-### 4) OpenRouter — Финальный анализ с уточнениями (F7)
+### 4) LLM Provider — Финальный анализ с уточнениями (F7)
 
 #### SYSTEM (final-analysis)
 Return ONLY valid JSON. No Markdown. No backticks. No extra text.
