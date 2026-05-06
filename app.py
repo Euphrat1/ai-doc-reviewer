@@ -7,6 +7,7 @@ import uuid
 import streamlit as st
 
 from ai_doc_reviewer.compress import build_prompt_corpus_mvp, render_prompt_corpus_text
+from ai_doc_reviewer.cursor_api import create_agent, stream_run_text, wait_run_terminal
 from ai_doc_reviewer.openrouter import chat_json, make_client, reformat_to_json
 from ai_doc_reviewer.parse import build_full_corpus
 from ai_doc_reviewer.report import build_prompt_corpus_summary, now_iso
@@ -60,11 +61,46 @@ def main() -> None:
     settings = get_settings()
 
     with st.sidebar:
-        st.header("LLM Provider (MVP: OpenRouter)")
-        api_key = st.text_input("API key", type="password", value=st.session_state.get("api_key", ""))
+        st.header("LLM Provider")
+        provider = st.selectbox(
+            "Provider",
+            options=["openrouter", "cursor_cloud_agents"],
+            format_func=lambda x: "OpenRouter" if x == "openrouter" else "Cursor (Cloud Agents REST)",
+            index=0,
+        )
+        st.session_state.provider = provider
+
+        st.subheader("Credentials")
+        api_key = st.text_input(
+            "API key",
+            type="password",
+            value=st.session_state.get("api_key", ""),
+            help="OpenRouter key or Cursor API key (Dashboard → Integrations).",
+        )
         st.session_state.api_key = api_key
-        model = st.text_input("Model", value=st.session_state.get("model", "openai/gpt-4o-mini"))
+        model_default = "openai/gpt-4o-mini" if provider == "openrouter" else "composer-2"
+        model = st.text_input(
+            "Model",
+            value=st.session_state.get("model", model_default),
+            help="OpenRouter: model slug. Cursor: model id from GET /v1/models (e.g. composer-2).",
+        )
         st.session_state.model = model
+
+        if provider == "cursor_cloud_agents":
+            st.subheader("Cursor repo (required)")
+            cursor_repo_url = st.text_input(
+                "Repo URL",
+                value=st.session_state.get(
+                    "cursor_repo_url",
+                    "https://github.com/Euphrat1/ai-doc-reviewer-sandbox.git",
+                ),
+            )
+            st.session_state.cursor_repo_url = cursor_repo_url
+            cursor_starting_ref = st.text_input(
+                "Starting ref",
+                value=st.session_state.get("cursor_starting_ref", "main"),
+            )
+            st.session_state.cursor_starting_ref = cursor_starting_ref
         ca_bundle_path = st.text_input(
             "CA bundle path (optional)",
             value=getattr(settings, "ca_bundle_path", ""),
@@ -235,11 +271,6 @@ def main() -> None:
                 build_primary_messages,
             )
 
-            client = make_client(
-                api_key,
-                ca_bundle_path=settings.ca_bundle_path,
-                disable_ssl_verify=settings.disable_ssl_verify,
-            )
             messages = (
                 build_manual_question_messages(task_text, st.session_state.prompt_text)
                 if do_manual_q
@@ -247,37 +278,98 @@ def main() -> None:
             )
             trace_id = f"req_{uuid.uuid4().hex[:8]}"
             st.session_state.trace_id = trace_id
-            try:
-                parsed, raw = chat_json(
-                    client=client,
-                    model=model,
-                    messages=messages,
-                    max_output_tokens=settings.max_output_tokens,
-                )
-                st.session_state.llm_raw = raw
-                st.session_state.llm = parsed
-            except Exception as e:
-                st.warning(f"Primary request failed: {type(e).__name__}: {e}")
-                # If network/SSL error, don't attempt JSON reformat.
-                if "CERTIFICATE_VERIFY_FAILED" in str(e) or "SSL" in str(e):
-                    st.info(
-                        "Looks like an SSL certificate issue. "
-                        "If you're behind a corporate proxy, set 'CA bundle path' "
-                        "or (temporarily) enable 'Disable SSL verification (unsafe)'."
-                    )
+            provider = st.session_state.get("provider", "openrouter")
+
+            if provider == "cursor_cloud_agents":
+                repo_url = st.session_state.get("cursor_repo_url", "").strip()
+                starting_ref = st.session_state.get("cursor_starting_ref", "main").strip() or "main"
+                if not repo_url:
+                    st.error("Cursor provider requires Repo URL.")
                     return
-                raw = getattr(e, "message", "") or str(e)
+
+                prompt_text = "\n\n".join(
+                    [
+                        "SYSTEM:",
+                        messages[0]["content"],
+                        "",
+                        "USER:",
+                        messages[1]["content"],
+                    ]
+                ).strip()
                 try:
-                    parsed2, raw2 = reformat_to_json(
+                    created = create_agent(
+                        api_key=api_key,
+                        prompt_text=prompt_text,
+                        repo_url=repo_url,
+                        starting_ref=starting_ref,
+                        model_id=model.strip() or None,
+                        auto_create_pr=False,
+                        ca_bundle_path=settings.ca_bundle_path,
+                        disable_ssl_verify=settings.disable_ssl_verify,
+                    )
+                    agent_id = created["agent"]["id"]
+                    run_id = created["run"]["id"]
+                    st.session_state.cursor_agent_id = agent_id
+                    st.session_state.cursor_run_id = run_id
+
+                    # Stream assistant text (best-effort) and wait terminal status.
+                    raw = stream_run_text(
+                        api_key=api_key,
+                        agent_id=agent_id,
+                        run_id=run_id,
+                        ca_bundle_path=settings.ca_bundle_path,
+                        disable_ssl_verify=settings.disable_ssl_verify,
+                    )
+                    _ = wait_run_terminal(
+                        api_key=api_key,
+                        agent_id=agent_id,
+                        run_id=run_id,
+                        ca_bundle_path=settings.ca_bundle_path,
+                        disable_ssl_verify=settings.disable_ssl_verify,
+                    )
+
+                    st.session_state.llm_raw = raw
+                    st.session_state.llm = json.loads(raw)
+                except Exception as e:
+                    st.error(f"Cursor provider failed: {type(e).__name__}: {e}")
+                    return
+
+            else:
+                client = make_client(
+                    api_key,
+                    ca_bundle_path=settings.ca_bundle_path,
+                    disable_ssl_verify=settings.disable_ssl_verify,
+                )
+                try:
+                    parsed, raw = chat_json(
                         client=client,
                         model=model,
-                        raw_text=raw,
+                        messages=messages,
                         max_output_tokens=settings.max_output_tokens,
                     )
-                    st.session_state.llm_raw = raw2
-                    st.session_state.llm = parsed2
-                except Exception as e2:
-                    st.error(f"Reformat-to-json failed: {e2}")
+                    st.session_state.llm_raw = raw
+                    st.session_state.llm = parsed
+                except Exception as e:
+                    st.warning(f"Primary request failed: {type(e).__name__}: {e}")
+                    if "CERTIFICATE_VERIFY_FAILED" in str(e) or "SSL" in str(e):
+                        st.info(
+                            "Looks like an SSL certificate issue. "
+                            "If you're behind a corporate proxy, set 'CA bundle path' "
+                            "or (temporarily) enable 'Disable SSL verification (unsafe)'."
+                        )
+                        return
+                    raw = getattr(e, "message", "") or str(e)
+                    try:
+                        parsed2, raw2 = reformat_to_json(
+                            client=client,
+                            model=model,
+                            raw_text=raw,
+                            max_output_tokens=settings.max_output_tokens,
+                        )
+                        st.session_state.llm_raw = raw2
+                        st.session_state.llm = parsed2
+                    except Exception as e2:
+                        st.error(f"Reformat-to-json failed: {e2}")
 
     llm = st.session_state.get("llm")
     if llm:

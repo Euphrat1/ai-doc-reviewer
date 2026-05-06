@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
+from .net import httpx_verify_config
+
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -14,11 +16,9 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 def make_client(
     api_key: str, *, ca_bundle_path: str | None = None, disable_ssl_verify: bool = False
 ) -> OpenAI:
-    verify: bool | str = True
-    if disable_ssl_verify:
-        verify = False
-    elif ca_bundle_path and ca_bundle_path.strip():
-        verify = ca_bundle_path.strip()
+    verify = httpx_verify_config(
+        ca_bundle_path=ca_bundle_path, disable_ssl_verify=disable_ssl_verify
+    )
     http_client = httpx.Client(verify=verify, timeout=90.0)
     return OpenAI(
         base_url=OPENROUTER_BASE_URL,

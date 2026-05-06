@@ -1,5 +1,7 @@
 streamlit
 openai
+httpx
+truststore
 pandas
 openpyxl
 Pillow
